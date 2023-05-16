@@ -3,14 +3,14 @@
 // go run main.go
 // tail -f data.log
 // go run main.go | tee -a $(date -u +\%Y-\%m-\%d).log
+// http "127.0.0.1:8080/events?stream={channel}"
 
 package main
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,65 +18,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/FestiveAkp/jji/counting-service/utils"
 	"github.com/gempir/go-twitch-irc/v4"
+	"github.com/r3labs/sse/v2"
 )
 
-func check(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func fileExists(fname string) bool {
-	info, err := os.Stat(fname)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return !info.IsDir()
-}
-
-func getLastCountFromFile(filename string) int64 {
-	// Open file
-	file, err := os.Open(filename)
-	check(err)
-	defer file.Close()
-
-	// Create empty buffer
-	buf := make([]byte, 32)
-	stat, err := os.Stat(filename)
-	check(err)
-
-	// Get file size and read last n bytes into buffer
-	start := stat.Size() - 32
-	_, err = file.ReadAt(buf, start)
-	if err != nil {
-		// File read error, e.g. there aren't 64 bytes available to read
-		fmt.Println(err)
-		return 0
-	}
-
-	// Convert buffer to string, trim outside whitespace, split into chunks
-	s := strings.TrimSpace(string(buf))
-	splits := strings.Split(s, " ")
-
-	// The last chunk is the final recorded count
-	lastCount, err := strconv.Atoi(splits[len(splits)-1])
-	if err != nil {
-		fmt.Println(err)
-		return 0
-	}
-
-	return int64(lastCount)
-}
-
 var count int64
-var channel = "theprimeagen"
+var channel = "moistcr1tikal"
 
 func listenToChat() {
 	client := twitch.NewAnonymousClient()
 
 	client.OnConnect(func() {
-		fmt.Println("Connected to chat.")
+		log.Println("Connected to chat.")
 	})
 
 	client.OnPrivateMessage(func(message twitch.PrivateMessage) {
@@ -85,35 +39,45 @@ func listenToChat() {
 		if strings.Contains(message.Message, "LUL") || strings.Contains(message.Message, "KEKW") {
 			atomic.AddInt64(&count, -1)
 		} else {
-			// Safely increment the count
 			atomic.AddInt64(&count, 1)
 		}
 	})
 
 	client.Join(channel)
 
-	err := client.Connect()
-	check(err)
+	log.Fatal(client.Connect())
+}
+
+func startServer(server sse.Server) {
+	port := ":8080"
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		server.ServeHTTP(w, r)
+	})
+
+	log.Println("Started web server on " + port)
+	log.Fatal(http.ListenAndServe(port, mux))
 }
 
 func main() {
-	fmt.Println("Starting counting-service...")
+	log.Println("Starting counting-service...")
 
 	// Create the data directory if it doesn't exist
-	if _, err := os.Stat("data/"); errors.Is(err, os.ErrNotExist) {
-		fmt.Println("Data directory not found, creating directory...")
+	if !utils.DirExists("data/") {
+		log.Println("Data directory not found, creating directory...")
 		err := os.Mkdir("data/", os.ModePerm)
-		check(err)
+		utils.Check(err)
 	}
 
-	// This is the file that will be receiving our stream of data
+	// This is the file that will be storing our stream of data
 	dataFile := filepath.Join("data", channel+"-data.log")
 
-	// Initialize the count with the last recorded value if it's available
-	if fileExists(dataFile) {
-		lastCount := getLastCountFromFile(dataFile)
-		fmt.Println("Found previous count of", lastCount)
-
+	// Initialize the in-memory count with the last recorded value if it's available
+	if utils.FileExists(dataFile) {
+		lastCount := utils.GetLastCountFromFile(dataFile)
+		log.Println("Found previous count of", lastCount)
 		atomic.AddInt64(&count, lastCount)
 	}
 
@@ -122,13 +86,23 @@ func main() {
 
 	// Set up logger to append data to stdout and log file
 	f, err := os.OpenFile(dataFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	check(err)
+	utils.Check(err)
 	defer f.Close()
 	mw := io.MultiWriter(os.Stdout, f)
-	logger := log.New(mw, "", log.LstdFlags|log.LUTC)
+	fileLogger := log.New(mw, "", log.LstdFlags|log.LUTC)
+
+	// Set up the server handler for pushing updates using Server-Sent Events
+	server := sse.New()
+	server.CreateStream(channel)
+
+	// Run the web server in the background
+	go startServer(*server)
 
 	// Report the current count every second
 	for range time.Tick(time.Second) {
-		logger.Println(count)
+		fileLogger.Println(count)
+
+		now := strconv.FormatInt(time.Now().Unix(), 10)
+		server.Publish(channel, &sse.Event{Data: []byte(now + " " + strconv.FormatInt(count, 10))})
 	}
 }
