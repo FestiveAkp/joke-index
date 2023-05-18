@@ -14,39 +14,16 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/FestiveAkp/jji/counting-service/twitch"
 	"github.com/FestiveAkp/jji/counting-service/utils"
-	"github.com/gempir/go-twitch-irc/v4"
 	"github.com/r3labs/sse/v2"
 )
 
 var count int64
-var channel = "moistcr1tikal"
-
-func listenToChat() {
-	client := twitch.NewAnonymousClient()
-
-	client.OnConnect(func() {
-		log.Println("Connected to chat.")
-	})
-
-	client.OnPrivateMessage(func(message twitch.PrivateMessage) {
-		// fmt.Println(message.Message)
-
-		if strings.Contains(message.Message, "LUL") || strings.Contains(message.Message, "KEKW") {
-			atomic.AddInt64(&count, -1)
-		} else {
-			atomic.AddInt64(&count, 1)
-		}
-	})
-
-	client.Join(channel)
-
-	log.Fatal(client.Connect())
-}
+var channel = "jerma985"
 
 func startServer(server sse.Server) {
 	port := ":8080"
@@ -63,6 +40,34 @@ func startServer(server sse.Server) {
 
 func main() {
 	log.Println("Starting counting-service...")
+
+	// go func() {
+	// 	// npx localtunnel --port 8080
+	// 	// https://ipv4.icanhazip.com/
+	// 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// 		io.WriteString(w, "hello!\n")
+	// 	})
+	// 	http.HandleFunc("/webhooks/twitch-callback", twitch.HandleEventSubOnline)
+	// 	http.ListenAndServe(":8080", nil)
+	// }()
+
+	// helix := twitch.GetNewHelixClient()
+
+	// userID := twitch.GetUserIDByChannelName(helix, channel)
+
+	// isLive := twitch.IsStreamLive(helix, channel)
+	// fmt.Println(isLive)
+
+	// res := twitch.CreateEventSubSubscriptionStreamOffline(helix, userID)
+	// fmt.Printf("%+v\n", res)
+
+	// subs := twitch.GetEventSubSubscriptions(helix)
+	// fmt.Printf("%+v\n", subs)
+
+	// for range time.Tick(time.Second) {
+	// }
+
+	// return
 
 	// Create the data directory if it doesn't exist
 	if !utils.DirExists("data/") {
@@ -82,7 +87,7 @@ func main() {
 	}
 
 	// Start worker for listening to chat and updating counts
-	go listenToChat()
+	go twitch.ListenToIRC(&count, channel)
 
 	// Set up logger to append data to stdout and log file
 	f, err := os.OpenFile(dataFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
